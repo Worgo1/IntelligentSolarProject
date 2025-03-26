@@ -1,49 +1,77 @@
 import math
+import pandas as pd
+from datetime import datetime
 from typing import Tuple
+import pvlib
+from pvlib import solarposition
 
 class PanelOptimizer:
-    def __init__(self):
-        # Default parameters
+    def __init__(self, latitude: float, longitude: float):
+        self.latitude = latitude
+        self.longitude = longitude
         self.min_angle = 0  # Minimum tilt angle (horizontal)
         self.max_angle = 90  # Maximum tilt angle (vertical)
         self.safe_angle = 0  # Safe position for extreme weather (horizontal)
     
     def calculate_optimal_angles(self, weather_data: dict) -> Tuple[float, float]:
         """
-        Calculate optimal tilt and azimuth angles based on weather conditions.
+        Calculate optimal tilt and azimuth angles based on weather conditions and time.
         
         Args:
             weather_data (dict): Weather data from WeatherMonitor
+            current_datetime (datetime): The current date and time
             
         Returns:
             Tuple[float, float]: (tilt_angle, azimuth_angle) in degrees
         """
         # If extreme weather, return safe position
+        current_datetime = pd.to_datetime(weather_data.get('date') + " " + weather_data.get('time') + ':00')
         if self._should_use_safe_position(weather_data):
             return (self.safe_angle, 0.0)
         
-        # Base angle calculation (simplified for demo)
-        # In a real implementation, this would also consider:
-        # - Sun position (based on time, date, and location)
-        # - Direct vs. diffuse radiation models
-        # - Historical performance data
+        # Use pvlib to calculate the solar position
+        solar_pos = self.calculate_solar_position(current_datetime)
         
+        # Solar Azimuth and Elevation
+        azimuth = solar_pos['azimuth'].iloc[0]  # Azimuth in degrees
+        elevation = solar_pos['elevation'].iloc[0]  # Elevation in degrees
+        
+        # Adjust tilt angle based on weather and solar elevation
+        base_tilt = elevation  # Base tilt angle is the solar elevation
         cloud_factor = weather_data['clouds'] / 100.0
-        wind_factor = min(1.0, weather_data['wind_speed'] / 20.0)
         
-        # On cloudy days, a more horizontal angle might be better for diffuse light
-        base_tilt = 45.0  # Optimal angle for many locations
-        adjusted_tilt = base_tilt * (1 - 0.3 * cloud_factor)  # Reduce angle when cloudy
+        # If it's cloudy, increase tilt to capture more diffuse light
+        if cloud_factor > 0.6:
+            adjusted_tilt = base_tilt + (base_tilt * 0.2)  # Increase tilt by 20% on cloudy days
+        else:
+            adjusted_tilt = base_tilt
         
-        # Limit the angle based on wind conditions
-        if wind_factor > 0.5:
-            adjusted_tilt *= (1 - (wind_factor - 0.5))
-        
-        # Ensure angles are within bounds
+        # Ensure tilt is within min/max bounds
         tilt = max(self.min_angle, min(self.max_angle, adjusted_tilt))
-        azimuth = 180.0  # Assuming south-facing panels in northern hemisphere
         
+        # Return the adjusted tilt and azimuth
         return (tilt, azimuth)
+    
+    def calculate_solar_position(self, current_datetime: datetime) -> pd.DataFrame:
+        """
+        Calculate the solar position (azimuth and elevation) based on the time and location.
+        
+        Args:
+            current_datetime (datetime): The current date and time
+            
+        Returns:
+            pd.DataFrame: A DataFrame containing solar azimuth and elevation
+        """
+        # Convert datetime to the format used by pvlib (Timestamp)
+        current_time = pd.Timestamp(current_datetime)
+        
+        # Create a pandas datetime index for pvlib
+        times = pd.DatetimeIndex([current_time])
+        
+        # Use pvlib to calculate solar position
+        solar_pos = solarposition.get_solarposition(times, self.latitude, self.longitude)
+        
+        return solar_pos
     
     def _should_use_safe_position(self, weather_data: dict) -> bool:
         """
@@ -90,4 +118,4 @@ class PanelOptimizer:
         cloud_factor = 1.0 - (weather_data['clouds'] / 100.0)
         priority = cloud_factor * (angle_diff / 90.0)
         
-        return max(0.0, min(1.0, priority)) 
+        return max(0.0, min(1.0, priority))
